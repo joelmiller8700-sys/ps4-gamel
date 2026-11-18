@@ -1,4 +1,4 @@
-name: Build PS4 app
+name: Build PS4 3D Horror Game
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang lld
+          sudo apt-get install -y clang lld fonts-dejavu-core
 
       - name: Download OpenOrbis toolchain
         run: |
@@ -23,7 +23,14 @@ jobs:
           mkdir -p toolchain
           tar -xzf toolchain.tar.gz -C toolchain
 
-      - name: Build piglet sample and dump sources
+      - name: Generate Arabic text images
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/gen
+          pip install pillow arabic-reshaper python-bidi || true
+          python3 gen_ar.py $GITHUB_WORKSPACE/gen/ar_data.h || echo '#define NO_ARABIC 1' > $GITHUB_WORKSPACE/gen/ar_data.h
+          head -c 200 $GITHUB_WORKSPACE/gen/ar_data.h
+
+      - name: Build game
         run: |
           H=$(find toolchain -path '*orbis/libkernel.h' | head -1)
           export OO_PS4_TOOLCHAIN=$PWD/$(dirname $(dirname $(dirname $H)))
@@ -31,37 +38,25 @@ jobs:
           export DOTNET_ROLL_FORWARD=Major
           chmod +x $OO_PS4_TOOLCHAIN/bin/linux/* || true
           cp -r $OO_PS4_TOOLCHAIN/samples samples
-          OUT=$GITHUB_WORKSPACE/out
-          mkdir -p $OUT
-
-          ls samples > $OUT/samples_list.txt
-          ls -R samples/piglet >> $OUT/samples_list.txt || true
-          grep -rIl "AudioOut" samples > $OUT/audio_files.txt || true
-          grep -rIl "Piglet" samples >> $OUT/audio_files.txt || true
-          find $OO_PS4_TOOLCHAIN/include -iname 'AudioOut*' -exec cp {} $OUT/ \; || true
-
-          for d in piglet threading; do
-            find samples/$d -type f \( -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name 'Makefile' -o -name '*.glsl' -o -name '*.vert' -o -name '*.frag' \) -size -100k | while read f; do
-              echo "=== $f"
-              cat "$f"
-            done >> $OUT/sources.txt
-          done
-
-          for f in $(cat $OUT/audio_files.txt | sort -u | head -8); do
-            case "$f" in
-              samples/piglet/*|samples/threading/*) ;;
-              *) echo "=== $f" >> $OUT/sources.txt; cat "$f" >> $OUT/sources.txt ;;
-            esac
-          done
-
-          cd samples/piglet
-          make || true
-          find . -name '*.pkg' -exec cp {} $OUT/ \;
-          ls -la $OUT
+          rm -rf samples/game
+          cp -r samples/input samples/game
+          mv samples/game/input samples/game/game
+          rm -rf samples/game/assets
+          cp main.cpp samples/game/game/main.cpp
+          cp gen/ar_data.h samples/game/game/ar_data.h
+          cd samples/game
+          sed -i 's/^TITLE[ ]*:=.*/TITLE       := Nightmare Cellar 3D/' Makefile
+          sed -i 's/^TITLE_ID[ ]*:=.*/TITLE_ID    := BREW00092/' Makefile
+          sed -i 's/^CONTENT_ID[ ]*:=.*/CONTENT_ID  := IV0000-BREW00092_00-NIGHTMARE3D00000/' Makefile
+          make
+          mkdir -p $GITHUB_WORKSPACE/out
+          find . -name '*.pkg' -exec cp {} $GITHUB_WORKSPACE/out/ \;
+          ls -la $GITHUB_WORKSPACE/out
+          test -n "$(ls $GITHUB_WORKSPACE/out)"
 
       - name: Upload result
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: piglet-test
-          path: out/*
+          name: nightmare-cellar-3d
+          path: out/*.pkg
