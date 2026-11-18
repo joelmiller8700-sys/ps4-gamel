@@ -1,0 +1,67 @@
+name: Build PS4 app
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld
+
+      - name: Download OpenOrbis toolchain
+        run: |
+          curl -sL https://api.github.com/repos/OpenOrbis/OpenOrbis-PS4-Toolchain/releases/latest -o rel.json
+          URL=$(grep browser_download_url rel.json | grep -i 'tar.gz' | head -1 | cut -d '"' -f4)
+          curl -L -o toolchain.tar.gz "$URL"
+          mkdir -p toolchain
+          tar -xzf toolchain.tar.gz -C toolchain
+
+      - name: Build piglet sample and dump sources
+        run: |
+          H=$(find toolchain -path '*orbis/libkernel.h' | head -1)
+          export OO_PS4_TOOLCHAIN=$PWD/$(dirname $(dirname $(dirname $H)))
+          export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+          export DOTNET_ROLL_FORWARD=Major
+          chmod +x $OO_PS4_TOOLCHAIN/bin/linux/* || true
+          cp -r $OO_PS4_TOOLCHAIN/samples samples
+          OUT=$GITHUB_WORKSPACE/out
+          mkdir -p $OUT
+
+          ls samples > $OUT/samples_list.txt
+          ls -R samples/piglet >> $OUT/samples_list.txt || true
+          grep -rIl "AudioOut" samples > $OUT/audio_files.txt || true
+          grep -rIl "Piglet" samples >> $OUT/audio_files.txt || true
+          find $OO_PS4_TOOLCHAIN/include -iname 'AudioOut*' -exec cp {} $OUT/ \; || true
+
+          for d in piglet threading; do
+            find samples/$d -type f \( -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name 'Makefile' -o -name '*.glsl' -o -name '*.vert' -o -name '*.frag' \) -size -100k | while read f; do
+              echo "=== $f"
+              cat "$f"
+            done >> $OUT/sources.txt
+          done
+
+          for f in $(cat $OUT/audio_files.txt | sort -u | head -8); do
+            case "$f" in
+              samples/piglet/*|samples/threading/*) ;;
+              *) echo "=== $f" >> $OUT/sources.txt; cat "$f" >> $OUT/sources.txt ;;
+            esac
+          done
+
+          cd samples/piglet
+          make || true
+          find . -name '*.pkg' -exec cp {} $OUT/ \;
+          ls -la $OUT
+
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: piglet-test
+          path: out/*
